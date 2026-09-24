@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#02050b">
+  <title>JellyfinTV · TV11</title>
+  <link rel="stylesheet" href="/static/remote.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">JellyfinTV · Guía v2</p>
+      <h1>TV11</h1>
+    </div>
+    <time id="clock" class="clock" aria-label="Hora actual">--:--</time>
+  </header>
+
+  <main>
+    <div id="feedback" class="feedback" role="status" aria-live="polite">
+      Toca un canal para sintonizar lo que está al aire.
+    </div>
+    <section aria-labelledby="guide-title">
+      <div class="section-heading">
+        <h2 id="guide-title">Programación</h2>
+        <span class="destination">Samsung Smart TV</span>
+      </div>
+      <div id="guide" class="guide" aria-busy="true"></div>
+    </section>
+  </main>
+
+  <script src="/static/remote.js" defer></script>
+</body>
+</html>
