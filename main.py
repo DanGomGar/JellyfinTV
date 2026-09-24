@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
 from typing import List
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from database import create_db_and_tables, get_session
 from models import Channel, ScheduleItem, ContentCriteria
@@ -90,7 +90,7 @@ def delete_channel(channel_id: int, session: Session = Depends(get_session)):
 @app.get("/api/channels/{channel_id}/now", response_model=dict)
 async def get_channel_now(channel_id: int, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
     # Find what's playing now
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     statement = select(ScheduleItem).where(
         ScheduleItem.channel_id == channel_id,
         ScheduleItem.start_time <= now,
@@ -137,7 +137,7 @@ async def get_channel_now(channel_id: int, background_tasks: BackgroundTasks, se
 
 @app.get("/api/channels/{channel_id}/schedule")
 def get_channel_schedule(channel_id: int, session: Session = Depends(get_session)):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     statement = select(ScheduleItem).where(
         ScheduleItem.channel_id == channel_id,
         ScheduleItem.end_time > now

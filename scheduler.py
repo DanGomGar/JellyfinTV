@@ -1,6 +1,6 @@
 import json
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlmodel import Session, select
 from models import Channel, ScheduleItem, ContentCriteria
 from jellyfin_client import jellyfin
@@ -20,11 +20,11 @@ async def fill_channel_schedule(channel_id: int, hours_to_fill: int = 24):
         statement = select(ScheduleItem).where(ScheduleItem.channel_id == channel_id).order_by(ScheduleItem.end_time.desc())
         last_item = session.exec(statement).first()
         
-        start_time = datetime.now()
+        start_time = datetime.now(timezone.utc)
         if last_item and last_item.end_time > start_time:
             start_time = last_item.end_time
             
-        target_end_time = datetime.now() + timedelta(hours=hours_to_fill)
+        target_end_time = datetime.now(timezone.utc) + timedelta(hours=hours_to_fill)
         
         if start_time >= target_end_time:
             return # Already filled
