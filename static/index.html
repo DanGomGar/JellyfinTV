@@ -179,6 +179,26 @@
             font-size: 13px;
         }
 
+        .remember-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 14px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .remember-option input {
+            width: auto;
+            margin: 0;
+        }
+
+        .connection-status {
+            color: var(--text-muted);
+            font-size: 13px;
+            margin-top: 6px;
+        }
+
         /* Show Cards (New) */
         .show-grid {
             display: grid;
@@ -465,14 +485,24 @@
             <input type="text" id="jf-url" placeholder="Jellyfin URL (e.g. http://localhost:8096)">
             <input type="text" id="jf-user" placeholder="Username">
             <input type="password" id="jf-pass" placeholder="Password">
+            <label class="remember-option">
+                <input type="checkbox" id="jf-remember" checked>
+                <span>Mantener JellyfinTV conectado después de reinicios</span>
+            </label>
             <button onclick="login()" style="width:100%; margin-top:10px;">Connect</button>
         </div>
 
         <!-- Create Channel -->
         <div class="card hidden" id="create-channel-section">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                <h2 style="margin:0">Create Channel</h2>
-                <button class="secondary" onclick="resetForm()" style="padding:8px 16px; font-size:14px;">Reset</button>
+                <div>
+                    <h2 style="margin:0">Create Channel</h2>
+                    <div id="connection-status" class="connection-status"></div>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button class="secondary" onclick="resetForm()" style="padding:8px 16px; font-size:14px;">Reset</button>
+                    <button class="secondary" onclick="logout()" style="padding:8px 16px; font-size:14px;">Cerrar sesión</button>
+                </div>
             </div>
 
             <input type="text" id="ch-name" placeholder="Channel Name (e.g. 90s Comedy)"
@@ -632,40 +662,67 @@
         // Let's fetch the token from the login response or settings.
 
         // --- Login ---
+        async function showApplication(serverUrl, username, remembered) {
+            jellyfinUrl = serverUrl;
+            document.getElementById('login-section').classList.add('hidden');
+            document.getElementById('create-channel-section').classList.remove('hidden');
+            document.getElementById('channels-section').classList.remove('hidden');
+            document.getElementById('connection-status').textContent =
+                `${username} · ${serverUrl}${remembered ? ' · conexión persistente' : ''}`;
+            await loadLibraryData();
+            await loadChannels();
+        }
+
+        async function restoreSession() {
+            try {
+                const res = await fetch('/api/auth/status');
+                if (!res.ok) return;
+                const status = await res.json();
+                if (status.connected) {
+                    await showApplication(
+                        status.server_url,
+                        status.username,
+                        status.remembered
+                    );
+                }
+            } catch (error) {
+                console.error('Unable to restore Jellyfin connection', error);
+            }
+        }
+
         async function login() {
             const url = document.getElementById('jf-url').value;
             const username = document.getElementById('jf-user').value;
             const password = document.getElementById('jf-pass').value;
+            const remember = document.getElementById('jf-remember').checked;
 
             const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, username, password })
+                body: JSON.stringify({ url, username, password, remember })
             });
 
             if (res.ok) {
-                jellyfinUrl = url;
-                // We don't get the token back directly here in the simple API, but we can assume the server handles it.
-                // However, for <img> tags to work, we need the token or auth.
-                // Let's assume the user might need to be logged in to Jellyfin in the same browser, OR we proxy images.
-                // For this implementation, let's try to get the token from a new endpoint or just assume we can't show images easily without it?
-                // Wait, the previous `get_channel_now` returned `jellyfin_token`. Let's assume we can get it.
-                // I'll add a quick fetch to get the token/settings if needed, or just rely on the server proxying? 
-                // No, server doesn't proxy images.
-                // Let's just use the fact that we are logged in on the server. 
-                // Actually, let's just try to fetch `get_channel_now` for a dummy channel or add a `/api/config` endpoint?
-                // Or just assume the user enters it.
-                // Let's just proceed. If images break, we'll know.
-
-                document.getElementById('login-section').classList.add('hidden');
-                document.getElementById('create-channel-section').classList.remove('hidden');
-                document.getElementById('channels-section').classList.remove('hidden');
-
-                await loadLibraryData();
-                loadChannels();
+                const result = await res.json();
+                document.getElementById('jf-pass').value = '';
+                await showApplication(
+                    result.server_url,
+                    result.username,
+                    result.remembered
+                );
             } else {
-                alert('Failed to connect');
+                let message = 'Failed to connect';
+                try {
+                    const error = await res.json();
+                    if (error.detail) message = error.detail;
+                } catch (_) {}
+                alert(message);
             }
+        }
+
+        async function logout() {
+            const res = await fetch('/api/logout', { method: 'POST' });
+            if (res.ok) window.location.reload();
         }
 
         // --- UI Toggles ---
@@ -1163,6 +1220,8 @@
                 modal.style.display = "none";
             }
         }
+
+        document.addEventListener('DOMContentLoaded', restoreSession);
     </script>
 </body>
 

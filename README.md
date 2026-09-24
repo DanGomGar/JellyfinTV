@@ -10,6 +10,7 @@ JellyfinTV simulates a linear TV experience using your existing Jellyfin library
 - **Continuous Scheduling**: Content is scheduled 24/7. Tuning in at any time starts playback exactly where the "live" broadcast would be.
 - **Auto-Refill**: Schedules are automatically topped up as you watch.
 - **Automatic Sources**: Keep a channel's candidate pool synchronized with selected Jellyfin source directories before each normal schedule refill.
+- **Persistent Connection**: Optionally retain the Jellyfin access token across JellyfinTV container and process restarts without storing the password.
 - **Auto-Ads**: Put ad files in the respective year folder in `./ads`
 - **Direct Streaming**: Plays content directly from your Jellyfin server to your browser.
 
@@ -58,3 +59,5 @@ If you prefer to run without Docker:
 4.  **Manage**: View the upcoming schedule or delete channels from the dashboard.
 
 See [Automatic source discovery](docs/source-discovery.md) for criteria formats, scheduling semantics, migration notes, and validation guidance.
+
+See [Persistent Jellyfin login](docs/persistent-login.md) for stored fields, startup validation, logout behavior, and security boundaries.

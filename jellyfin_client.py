@@ -43,32 +43,98 @@ class JellyfinClient:
         if settings.JELLYFIN_TOKEN:
              self.headers["X-Emby-Token"] = settings.JELLYFIN_TOKEN
 
-    async def login(self) -> bool:
-        """Logs in and sets the token in settings/headers."""
-        url = f"{self.base_url}/Users/AuthenticateByName"
-        payload = {
-            "Username": settings.JELLYFIN_USERNAME,
-            "Pw": settings.JELLYFIN_PASSWORD
+    def configure_connection(
+        self,
+        base_url: str,
+        username: str,
+        user_id: str,
+        access_token: str,
+    ) -> None:
+        settings.JELLYFIN_URL = base_url.rstrip("/")
+        settings.JELLYFIN_USERNAME = username
+        settings.JELLYFIN_PASSWORD = ""
+        settings.JELLYFIN_USER_ID = user_id
+        settings.JELLYFIN_TOKEN = access_token
+        self.base_url = settings.JELLYFIN_URL
+        self.headers["X-Emby-Token"] = access_token
+
+    def clear_connection(self) -> None:
+        settings.JELLYFIN_URL = ""
+        settings.JELLYFIN_USERNAME = ""
+        settings.JELLYFIN_PASSWORD = ""
+        settings.JELLYFIN_USER_ID = ""
+        settings.JELLYFIN_TOKEN = ""
+        self.base_url = ""
+        self.headers.pop("X-Emby-Token", None)
+
+    async def authenticate(
+        self, base_url: str, username: str, password: str
+    ) -> Optional[Dict[str, str]]:
+        """Authenticate without mutating the active connection."""
+        url = f"{base_url.rstrip('/')}/Users/AuthenticateByName"
+        payload = {"Username": username, "Pw": password}
+        headers = {
+            "X-Emby-Authorization": self.headers["X-Emby-Authorization"]
         }
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, json=payload, headers=self.headers)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
-                token = data.get("AccessToken")
-                user = data.get("User", {})
-                user_id = user.get("Id")
-                
-                if token:
-                    settings.JELLYFIN_TOKEN = token
-                    if user_id:
-                        settings.JELLYFIN_USER_ID = user_id
-                    self.headers["X-Emby-Token"] = token
-                    return True
-            except Exception as e:
-                print(f"Login failed: {e}")
-                return False
-        return False
+        except (httpx.HTTPError, ValueError) as exc:
+            print(f"Login failed: {exc}")
+            return None
+
+        token = data.get("AccessToken")
+        user_id = data.get("User", {}).get("Id")
+        if not token or not user_id:
+            return None
+        return {"access_token": token, "user_id": user_id}
+
+    async def validate_connection(self) -> str:
+        """Return valid, invalid, or unavailable for the configured token."""
+        if not settings.JELLYFIN_TOKEN or not self.base_url:
+            return "invalid"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/Users/Me", headers=self.headers
+                )
+        except httpx.HTTPError:
+            return "unavailable"
+        if response.status_code == 200:
+            return "valid"
+        if response.status_code in {401, 403}:
+            return "invalid"
+        return "unavailable"
+
+    async def logout(self) -> None:
+        if settings.JELLYFIN_TOKEN and self.base_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await client.post(
+                        f"{self.base_url}/Sessions/Logout", headers=self.headers
+                    )
+            except httpx.HTTPError:
+                pass
+        self.clear_connection()
+
+    async def login(self) -> bool:
+        """Logs in and sets the token in settings/headers."""
+        result = await self.authenticate(
+            self.base_url,
+            settings.JELLYFIN_USERNAME,
+            settings.JELLYFIN_PASSWORD,
+        )
+        if not result:
+            return False
+        self.configure_connection(
+            self.base_url,
+            settings.JELLYFIN_USERNAME,
+            result["user_id"],
+            result["access_token"],
+        )
+        return True
 
     async def get_user_views(self) -> List[Dict[str, Any]]:
         """Gets top level user views (libraries)."""

@@ -6,9 +6,10 @@ from typing import List
 import json
 import httpx
 from datetime import datetime, timezone
+from pydantic import BaseModel
 
-from database import create_db_and_tables, get_session
-from models import Channel, ScheduleItem, ContentCriteria
+from database import create_db_and_tables, engine, get_session
+from models import Channel, ScheduleItem, ContentCriteria, JellyfinConnection
 from config import settings
 from jellyfin_client import jellyfin
 from scheduler import fill_channel_schedule
@@ -18,6 +19,61 @@ app = FastAPI()
 TV11_DEVICE_ID = "TW96aWxsYS81LjAgKFNNQVJULVRWOyBMSU5VWDsgVGl6ZW4gNS4wKSBBcHBsZVdlYktpdC81MzcuMzYgKEtIVE1MLCBsaWtlIEdlY2tvKSBWZXJzaW9uLzUuMCBUViBTYWZhcmkvNTM3LjM2fDE3ODg0OTc5MzM5MTg1"
 TV11_CLIENT = "Jellyfin for Tizen"
 TV11_DEVICE_NAME = "Samsung Smart TV"
+AUTH_VALIDATION_STATUS = "disconnected"
+
+
+class LoginRequest(BaseModel):
+    url: str
+    username: str
+    password: str
+    remember: bool = False
+
+
+def normalize_jellyfin_url(value: str) -> str:
+    url = value.strip().rstrip("/")
+    try:
+        parsed = httpx.URL(url)
+    except (TypeError, httpx.InvalidURL) as exc:
+        raise HTTPException(status_code=422, detail="Invalid Jellyfin URL") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.host:
+        raise HTTPException(
+            status_code=422,
+            detail="Jellyfin URL must use http:// or https://",
+        )
+    return url
+
+
+def store_persistent_connection(
+    session: Session,
+    server_url: str,
+    username: str,
+    user_id: str,
+    access_token: str,
+) -> None:
+    connection = session.get(JellyfinConnection, 1)
+    if not connection:
+        connection = JellyfinConnection(
+            id=1,
+            server_url=server_url,
+            username=username,
+            user_id=user_id,
+            access_token=access_token,
+        )
+    else:
+        connection.server_url = server_url
+        connection.username = username
+        connection.user_id = user_id
+        connection.access_token = access_token
+        connection.updated_at = datetime.now(timezone.utc)
+    session.add(connection)
+    session.commit()
+
+
+def delete_persistent_connection(session: Session) -> None:
+    connection = session.get(JellyfinConnection, 1)
+    if connection:
+        session.delete(connection)
+        session.commit()
 
 def validate_selection_criteria(criteria_json: str) -> None:
     try:
@@ -52,24 +108,96 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/ads", StaticFiles(directory="ads"), name="ads")
 
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
+    global AUTH_VALIDATION_STATUS
     create_db_and_tables()
+    with Session(engine) as session:
+        connection = session.get(JellyfinConnection, 1)
+        if not connection:
+            AUTH_VALIDATION_STATUS = "disconnected"
+            return
+        jellyfin.configure_connection(
+            connection.server_url,
+            connection.username,
+            connection.user_id,
+            connection.access_token,
+        )
+
+    AUTH_VALIDATION_STATUS = await jellyfin.validate_connection()
+    if AUTH_VALIDATION_STATUS == "invalid":
+        jellyfin.clear_connection()
+        with Session(engine) as session:
+            delete_persistent_connection(session)
 
 # --- API Routes ---
 
 @app.post("/api/login")
-async def login(credentials: dict):
-    settings.JELLYFIN_URL = credentials.get("url")
-    settings.JELLYFIN_USERNAME = credentials.get("username")
-    settings.JELLYFIN_PASSWORD = credentials.get("password")
-    
-    # Re-init client with new URL if needed (or just rely on settings)
-    jellyfin.base_url = settings.JELLYFIN_URL
-    
-    success = await jellyfin.login()
-    if not success:
+async def login(
+    credentials: LoginRequest,
+    session: Session = Depends(get_session),
+):
+    global AUTH_VALIDATION_STATUS
+    server_url = normalize_jellyfin_url(credentials.url)
+    username = credentials.username.strip()
+    if not username:
+        raise HTTPException(status_code=422, detail="Username is required")
+
+    result = await jellyfin.authenticate(
+        server_url,
+        username,
+        credentials.password,
+    )
+    if not result:
         raise HTTPException(status_code=401, detail="Login failed")
-    return {"status": "success"}
+
+    jellyfin.configure_connection(
+        server_url,
+        username,
+        result["user_id"],
+        result["access_token"],
+    )
+    AUTH_VALIDATION_STATUS = "valid"
+
+    if credentials.remember:
+        store_persistent_connection(
+            session,
+            server_url,
+            username,
+            result["user_id"],
+            result["access_token"],
+        )
+    else:
+        delete_persistent_connection(session)
+
+    return {
+        "status": "success",
+        "connected": True,
+        "remembered": credentials.remember,
+        "server_url": server_url,
+        "username": username,
+    }
+
+
+@app.get("/api/auth/status")
+async def get_auth_status(session: Session = Depends(get_session)):
+    remembered = session.get(JellyfinConnection, 1) is not None
+    configured = bool(settings.JELLYFIN_TOKEN and settings.JELLYFIN_URL)
+    return {
+        "connected": configured and AUTH_VALIDATION_STATUS != "invalid",
+        "remembered": remembered,
+        "validation_status": AUTH_VALIDATION_STATUS,
+        "server_url": settings.JELLYFIN_URL if configured else None,
+        "username": settings.JELLYFIN_USERNAME if configured else None,
+    }
+
+
+@app.post("/api/logout")
+async def logout(session: Session = Depends(get_session)):
+    global AUTH_VALIDATION_STATUS
+    await jellyfin.logout()
+    delete_persistent_connection(session)
+    AUTH_VALIDATION_STATUS = "disconnected"
+    return {"status": "disconnected"}
 
 @app.get("/api/channels", response_model=List[Channel])
 def get_channels(session: Session = Depends(get_session)):

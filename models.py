@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlmodel import Field, SQLModel, Relationship, JSON
 from pydantic import BaseModel
 
@@ -38,6 +38,17 @@ class ScheduleItem(SQLModel, table=True):
     media_start_offset: int = Field(default=0) # Start playing from this second (for mid-rolls)
     
     channel: Channel = Relationship(back_populates="schedules")
+
+
+class JellyfinConnection(SQLModel, table=True):
+    """Single persisted Jellyfin connection used by this server instance."""
+
+    id: Optional[int] = Field(default=1, primary_key=True)
+    server_url: str
+    username: str
+    user_id: str
+    access_token: str
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 # Helper model for Criteria
 class ContentCriteria(BaseModel):
