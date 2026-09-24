@@ -3,6 +3,13 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from config import settings
 
+def _validated_year(value: Any, fallback: int, current_year: int) -> int:
+    try:
+        year = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return year if 1900 <= year <= current_year else fallback
+
 class JellyfinClient:
     def __init__(self):
         self.base_url = settings.JELLYFIN_URL
@@ -130,8 +137,9 @@ class JellyfinClient:
         # We'll do a broad search for items to find years.
         # To be efficient, we might just hardcode reasonable defaults or fetch a subset.
         # Let's try to fetch all items (lightweight) to get years.
+        current_year = datetime.now().year
         if not settings.JELLYFIN_TOKEN:
-            return {"min_year": 1900, "max_year": datetime.now().year}
+            return {"min_year": 1900, "max_year": current_year}
             
         user_id = self._get_user_id()
         url = f"{self.base_url}/Users/{user_id}/Items"
@@ -145,7 +153,7 @@ class JellyfinClient:
         }
         
         min_year = 1900
-        max_year = datetime.now().year
+        max_year = current_year
         
         async with httpx.AsyncClient() as client:
             # Get Min
@@ -153,7 +161,9 @@ class JellyfinClient:
             if res_min.status_code == 200:
                 items = res_min.json().get("Items", [])
                 if items:
-                    min_year = items[0].get("ProductionYear", 1900)
+                    min_year = _validated_year(
+                        items[0].get("ProductionYear"), 1900, current_year
+                    )
             
             # Get Max
             params["SortOrder"] = "Descending"
@@ -161,7 +171,9 @@ class JellyfinClient:
             if res_max.status_code == 200:
                 items = res_max.json().get("Items", [])
                 if items:
-                    max_year = items[0].get("ProductionYear", max_year)
+                    max_year = _validated_year(
+                        items[0].get("ProductionYear"), current_year, current_year
+                    )
                     
         return {"min_year": min_year, "max_year": max_year}
 
