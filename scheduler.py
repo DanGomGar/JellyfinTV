@@ -3,7 +3,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from sqlmodel import Session, select
 from models import Channel, ScheduleItem, ContentCriteria
-from jellyfin_client import jellyfin
+from jellyfin_client import jellyfin, filter_items_by_sources
 from database import engine
 from ad_manager import get_ad_for_year
 
@@ -37,9 +37,24 @@ async def fill_channel_schedule(channel_id: int, hours_to_fill: int = 24):
         
         # Fetch items from Jellyfin
         items = await jellyfin.search_items(criteria_dict)
+
+        # Dynamic source discovery happens immediately before schedule generation.
+        # Existing schedule entries remain untouched; this only changes the candidate
+        # pool used for newly generated entries.
+        selection_mode = criteria_dict.get("selection_mode")
+        if selection_mode == "sources":
+            sources = criteria_dict.get("sources", [])
+            if not sources:
+                print(f"No sources configured for channel {channel.name}")
+                return
+            items = filter_items_by_sources(items, sources)
+
+        if selection_mode == "items" and not criteria_dict.get("include_items"):
+            print(f"No manual items configured for channel {channel.name}")
+            return
         
         # Filter by specific items if selected
-        if criteria_dict.get("include_items"):
+        if selection_mode != "sources" and criteria_dict.get("include_items"):
             included_ids = set(criteria_dict["include_items"])
             # Include if the Item ID is selected OR if the Item's Series ID is selected
             items = [

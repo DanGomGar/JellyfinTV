@@ -1,6 +1,7 @@
 import httpx
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from pathlib import PurePosixPath
 from config import settings
 
 def _validated_year(value: Any, fallback: int, current_year: int) -> int:
@@ -9,6 +10,27 @@ def _validated_year(value: Any, fallback: int, current_year: int) -> int:
     except (TypeError, ValueError):
         return fallback
     return year if 1900 <= year <= current_year else fallback
+
+def source_name_from_path(path: Optional[str]) -> Optional[str]:
+    """Return the immediate parent directory used as an item's source."""
+    if not path:
+        return None
+    normalized = path.replace("\\", "/")
+    if normalized.lower().endswith(".tmp.mp4"):
+        return None
+    parent = PurePosixPath(normalized).parent.name.strip()
+    return parent or None
+
+def filter_items_by_sources(
+    items: List[Dict[str, Any]], sources: List[str]
+) -> List[Dict[str, Any]]:
+    """Keep items whose immediate parent directory is an allowed source."""
+    allowed = set(sources)
+    return [
+        item
+        for item in items
+        if source_name_from_path(item.get("Path")) in allowed
+    ]
 
 class JellyfinClient:
     def __init__(self):
@@ -74,7 +96,7 @@ class JellyfinClient:
         params = {
             "Recursive": "true",
             "Recursive": "true",
-            "Fields": "Overview,RunTimeTicks,ProductionYear,Genres,Tags,SeriesName,SeriesId,SeriesPrimaryImageTag,ImageTags",
+            "Fields": "Overview,Path,RunTimeTicks,ProductionYear,Genres,Tags,SeriesName,SeriesId,SeriesPrimaryImageTag,ImageTags",
             "IncludeItemTypes": ",".join(criteria.get("item_types", ["Movie", "Episode"])),
         }
         
@@ -98,6 +120,19 @@ class JellyfinClient:
             if response.status_code == 200:
                 return response.json().get("Items", [])
         return []
+
+    async def get_sources(self) -> List[Dict[str, Any]]:
+        """List immediate parent directories represented in the Jellyfin library."""
+        items = await self.search_items({"item_types": ["Movie", "Episode"]})
+        counts: Dict[str, int] = {}
+        for item in items:
+            source = source_name_from_path(item.get("Path"))
+            if source:
+                counts[source] = counts.get(source, 0) + 1
+        return [
+            {"id": source, "name": source, "item_count": count}
+            for source, count in sorted(counts.items(), key=lambda pair: pair[0].casefold())
+        ]
 
     def _get_user_id(self) -> str:
         if settings.JELLYFIN_USER_ID:

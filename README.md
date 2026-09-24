@@ -9,6 +9,7 @@ JellyfinTV simulates a linear TV experience using your existing Jellyfin library
 - **Virtual Channels**: Create channels from specific genres, years, studios, or tags.
 - **Continuous Scheduling**: Content is scheduled 24/7. Tuning in at any time starts playback exactly where the "live" broadcast would be.
 - **Auto-Refill**: Schedules are automatically topped up as you watch.
+- **Automatic Sources**: Keep a channel's candidate pool synchronized with selected Jellyfin source directories before each normal schedule refill.
 - **Auto-Ads**: Put ad files in the respective year folder in `./ads`
 - **Direct Streaming**: Plays content directly from your Jellyfin server to your browser.
 
@@ -49,7 +50,11 @@ If you prefer to run without Docker:
 1.  **Connect**: Enter your Jellyfin Server URL, Username, and Password.
 2.  **Create Channel**:
     -   Name your channel (e.g., "90s Action").
+    -   Choose whether content comes from all matching items, automatic source directories, or a fixed manual selection.
     -   Select filters (Genres, Years, Studios, Ratings).
-    -   (Optional) Select specific shows to include.
+    -   For automatic sources, select one or more source directories discovered from Jellyfin item paths.
+    -   For manual selection, select the exact shows to include.
 3.  **Watch**: Click "Watch" to start streaming.
 4.  **Manage**: View the upcoming schedule or delete channels from the dashboard.
+
+See [Automatic source discovery](docs/source-discovery.md) for criteria formats, scheduling semantics, migration notes, and validation guidance.

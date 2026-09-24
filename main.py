@@ -13,6 +13,35 @@ from scheduler import fill_channel_schedule
 
 app = FastAPI()
 
+
+def validate_selection_criteria(criteria_json: str) -> None:
+    try:
+        criteria = json.loads(criteria_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid channel criteria") from exc
+
+    selection_mode = criteria.get("selection_mode")
+    if selection_mode is None:
+        return
+    if selection_mode not in {"all", "sources", "items"}:
+        raise HTTPException(status_code=422, detail="Invalid content selection mode")
+    if selection_mode == "sources":
+        sources = criteria.get("sources")
+        if not isinstance(sources, list) or not sources:
+            raise HTTPException(status_code=422, detail="Select at least one source")
+        if any(
+            not isinstance(source, str)
+            or not source.strip()
+            or "/" in source
+            or "\\" in source
+            for source in sources
+        ):
+            raise HTTPException(status_code=422, detail="Invalid source identifier")
+    if selection_mode == "items":
+        item_ids = criteria.get("include_items")
+        if not isinstance(item_ids, list) or not item_ids:
+            raise HTTPException(status_code=422, detail="Select at least one item")
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/ads", StaticFiles(directory="ads"), name="ads")
@@ -44,6 +73,7 @@ def get_channels(session: Session = Depends(get_session)):
 
 @app.post("/api/channels", response_model=Channel)
 def create_channel(channel: Channel, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+    validate_selection_criteria(channel.criteria)
     session.add(channel)
     session.commit()
     session.refresh(channel)
@@ -55,6 +85,8 @@ def update_channel(channel_id: int, updated_channel: Channel, background_tasks: 
     channel = session.get(Channel, channel_id)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
+
+    validate_selection_criteria(updated_channel.criteria)
         
     channel.name = updated_channel.name
     channel.criteria = updated_channel.criteria
@@ -169,6 +201,10 @@ async def get_studios():
 @app.get("/api/library/ratings")
 async def get_ratings():
     return await jellyfin.get_ratings()
+
+@app.get("/api/library/sources")
+async def get_sources():
+    return await jellyfin.get_sources()
 
 @app.post("/api/library/search")
 async def search_library(criteria: dict):

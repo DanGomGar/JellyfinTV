@@ -146,6 +146,39 @@
             cursor: pointer;
         }
 
+        .selection-mode-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin: 20px 0;
+        }
+
+        .selection-mode-grid .filter-item {
+            align-items: flex-start;
+            min-height: 64px;
+        }
+
+        .selection-mode-grid small {
+            display: block;
+            color: var(--text-muted);
+            font-weight: normal;
+            line-height: 1.35;
+        }
+
+        .source-panel {
+            margin: 16px 0 24px;
+            padding: 18px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #252525;
+        }
+
+        .source-summary,
+        .channel-selection {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
         /* Show Cards (New) */
         .show-grid {
             display: grid;
@@ -446,6 +479,34 @@
                 style="font-size:1.1rem; padding:16px;">
             <input type="hidden" id="ch-id">
 
+            <h3 style="margin-top:30px;">Content Selection</h3>
+            <div class="selection-mode-grid">
+                <label class="filter-item">
+                    <input type="radio" name="selection-mode" value="all" checked onchange="updateSelectionMode()">
+                    <span>All matching content<small>Automatically use everything matching the filters.</small></span>
+                </label>
+                <label class="filter-item">
+                    <input type="radio" name="selection-mode" value="sources" onchange="updateSelectionMode()">
+                    <span>Automatic sources<small>Discover new items from selected source directories.</small></span>
+                </label>
+                <label class="filter-item">
+                    <input type="radio" name="selection-mode" value="items" onchange="updateSelectionMode()">
+                    <span>Manual items<small>Keep a fixed list of selected Jellyfin items.</small></span>
+                </label>
+            </div>
+
+            <div id="source-selection" class="source-panel hidden">
+                <h3>Source directories</h3>
+                <p style="color:var(--text-muted); font-size:14px;">
+                    New Jellyfin items from these directories become eligible during the next normal schedule refill.
+                    Existing schedule entries are not changed.
+                </p>
+                <div class="grid-container" id="source-grid">
+                    <div class="loading">Loading sources...</div>
+                </div>
+                <div id="source-summary" class="source-summary" style="margin-top:12px;">0 sources selected.</div>
+            </div>
+
             <!-- Ad Settings -->
             <div style="margin: 20px 0; padding: 20px; background: #252525; border-radius: 8px;">
                 <label style="display:flex; align-items:center; cursor:pointer; font-weight:bold;">
@@ -519,15 +580,16 @@
                 </div>
             </div>
 
-            <h3 style="margin-top:30px;">3. Filtered Shows</h3>
-            <p style="color:var(--text-muted); font-size:14px; margin-bottom:15px;">
-                These shows match your criteria. Select specific shows to <strong>only</strong> include them. Leave all
-                unselected to include everything matching the criteria.
-            </p>
-            <input type="text" id="show-search" placeholder="Search in results..." onkeyup="filterShowList()">
+            <div id="manual-items-section" class="hidden">
+                <h3 style="margin-top:30px;">3. Manual Item Selection</h3>
+                <p style="color:var(--text-muted); font-size:14px; margin-bottom:15px;">
+                    Select the exact Jellyfin items that should remain eligible for this channel.
+                </p>
+                <input type="text" id="show-search" placeholder="Search in results..." onkeyup="filterShowList()">
 
-            <div class="show-grid" id="show-list">
-                <div class="loading">Waiting for selection...</div>
+                <div class="show-grid" id="show-list">
+                    <div class="loading">Choose Manual items to load matching content.</div>
+                </div>
             </div>
 
             <button onclick="createChannel()"
@@ -560,6 +622,9 @@
         let allChannels = [];
         let searchTimeout = null;
         let jellyfinUrl = "";
+        let allSources = [];
+        let libraryYearMin = 1900;
+        let libraryYearMax = new Date().getFullYear();
         let jellyfinToken = ""; // Ideally we'd get this from API or store it, but for image URLs we might need it? 
         // Actually image URLs usually don't need token if public? No, they need it.
         // We'll assume we can construct it or use a proxy if needed. 
@@ -621,18 +686,67 @@
             document.getElementById('ad-settings').style.display = enabled ? 'block' : 'none';
         }
 
+        function getSelectionMode() {
+            return document.querySelector('input[name="selection-mode"]:checked').value;
+        }
+
+        function updateSelectionMode() {
+            const mode = getSelectionMode();
+            document.getElementById('source-selection').classList.toggle('hidden', mode !== 'sources');
+            document.getElementById('manual-items-section').classList.toggle('hidden', mode !== 'items');
+            if (mode === 'items') scheduleUpdate();
+            updateSourceSummary();
+        }
+
         // --- Data Loading ---
         async function loadLibraryData() {
             const statsRes = await fetch('/api/library/stats');
             const stats = await statsRes.json();
             setupSlider(stats.min_year, stats.max_year);
 
-            loadGrid('/api/library/genres', 'genre-grid');
-            loadGrid('/api/library/studios', 'studio-grid');
-            loadGrid('/api/library/ratings', 'rating-grid');
-            loadGrid('/api/library/tags', 'tag-grid');
+            await Promise.all([
+                loadGrid('/api/library/genres', 'genre-grid'),
+                loadGrid('/api/library/studios', 'studio-grid'),
+                loadGrid('/api/library/ratings', 'rating-grid'),
+                loadGrid('/api/library/tags', 'tag-grid'),
+                loadSources()
+            ]);
 
             scheduleUpdate();
+        }
+
+        async function loadSources() {
+            const res = await fetch('/api/library/sources');
+            allSources = res.ok ? await res.json() : [];
+            const grid = document.getElementById('source-grid');
+            grid.innerHTML = '';
+            if (allSources.length === 0) {
+                grid.innerHTML = '<div class="loading">No source directories found.</div>';
+                updateSourceSummary();
+                return;
+            }
+            allSources.forEach(source => {
+                const label = document.createElement('label');
+                label.className = 'filter-item';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = source.id;
+                checkbox.addEventListener('change', updateSourceSummary);
+                const text = document.createElement('span');
+                text.textContent = `${source.name} (${source.item_count})`;
+                label.append(checkbox, text);
+                grid.appendChild(label);
+            });
+            updateSourceSummary();
+        }
+
+        function updateSourceSummary() {
+            const selected = getCheckedValues('#source-grid');
+            const itemCount = allSources
+                .filter(source => selected.includes(source.id))
+                .reduce((total, source) => total + source.item_count, 0);
+            document.getElementById('source-summary').textContent =
+                `${selected.length} source${selected.length === 1 ? '' : 's'} selected · ${itemCount} current items`;
         }
 
         async function loadGrid(url, elementId) {
@@ -654,6 +768,8 @@
 
         // --- Slider ---
         function setupSlider(min, max) {
+            libraryYearMin = min;
+            libraryYearMax = max;
             const sliderMin = document.getElementById('slider-min');
             const sliderMax = document.getElementById('slider-max');
 
@@ -684,10 +800,22 @@
             updateSlider();
         }
 
+        function getSelectedYears() {
+            let yearMin = parseInt(document.getElementById('slider-min').value);
+            let yearMax = parseInt(document.getElementById('slider-max').value);
+            if (yearMin > yearMax) { const value = yearMin; yearMin = yearMax; yearMax = value; }
+            if (yearMin === libraryYearMin && yearMax === libraryYearMax) return [];
+            const years = [];
+            for (let year = yearMin; year <= yearMax; year++) years.push(year.toString());
+            return years;
+        }
+
         // --- Show List & Search ---
         function scheduleUpdate() {
             if (searchTimeout) clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(updateShows, 500);
+            if (getSelectionMode() === 'items') {
+                searchTimeout = setTimeout(updateShows, 500);
+            }
         }
 
         async function updateShows() {
@@ -699,16 +827,9 @@
             const selectedRatings = getCheckedValues('#rating-grid');
             const selectedTags = getCheckedValues('#tag-grid');
 
-            let yearMin = parseInt(document.getElementById('slider-min').value);
-            let yearMax = parseInt(document.getElementById('slider-max').value);
-            if (yearMin > yearMax) { const t = yearMin; yearMin = yearMax; yearMax = t; }
-
-            let years = [];
-            for (let y = yearMin; y <= yearMax; y++) years.push(y.toString());
-
             const criteria = {
                 genres: selectedGenres,
-                years: years,
+                years: getSelectedYears(),
                 studios: selectedStudios,
                 ratings: selectedRatings,
                 tags: selectedTags,
@@ -813,22 +934,29 @@
             const selectedRatings = getCheckedValues('#rating-grid');
             const selectedTags = getCheckedValues('#tag-grid');
 
-            let yearMin = parseInt(document.getElementById('slider-min').value);
-            let yearMax = parseInt(document.getElementById('slider-max').value);
-            if (yearMin > yearMax) { const t = yearMin; yearMin = yearMax; yearMax = t; }
-            let years = [];
-            for (let y = yearMin; y <= yearMax; y++) years.push(y.toString());
-
             // Get selected items from cards
             const selectedItems = Array.from(document.querySelectorAll('.show-card.selected')).map(c => c.dataset.id);
+            const selectionMode = getSelectionMode();
+            const selectedSources = getCheckedValues('#source-grid');
+
+            if (selectionMode === 'sources' && selectedSources.length === 0) {
+                alert('Select at least one source directory');
+                return;
+            }
+            if (selectionMode === 'items' && selectedItems.length === 0) {
+                alert('Select at least one Jellyfin item');
+                return;
+            }
 
             const criteria = {
+                selection_mode: selectionMode,
                 genres: selectedGenres,
-                years: years,
+                years: getSelectedYears(),
                 studios: selectedStudios,
                 ratings: selectedRatings,
                 tags: selectedTags,
-                include_items: selectedItems.length > 0 ? selectedItems : undefined,
+                sources: selectionMode === 'sources' ? selectedSources : undefined,
+                include_items: selectionMode === 'items' ? selectedItems : undefined,
                 content_types: getContentTypes()
             };
 
@@ -864,6 +992,8 @@
             document.querySelector('#create-channel-section h2').innerText = "Create Channel";
             document.querySelector('button[onclick="createChannel()"]').innerText = "Create Channel";
 
+            document.querySelector('input[name="selection-mode"][value="all"]').checked = true;
+
             // Clear selections
             document.querySelectorAll('.show-card.selected').forEach(c => c.classList.remove('selected'));
             document.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = false);
@@ -872,6 +1002,10 @@
             // (Simplified: just reload defaults or keep as is)
             document.getElementById('type-movie').checked = true;
             document.getElementById('type-series').checked = true;
+            document.getElementById('slider-min').value = libraryYearMin;
+            document.getElementById('slider-max').value = libraryYearMax;
+            document.getElementById('slider-min').oninput();
+            updateSelectionMode();
         }
 
         async function loadChannels() {
@@ -880,6 +1014,7 @@
             const list = document.getElementById('channel-list');
             list.innerHTML = '';
             allChannels.forEach(ch => {
+                const selection = describeChannelSelection(ch);
                 const li = document.createElement('li');
                 li.className = 'channel-item';
                 li.innerHTML = `
@@ -892,9 +1027,22 @@
                             <button class="danger" onclick="deleteChannel(${ch.id})">Delete</button>
                         </div>
                     </div>
+                    <div class="channel-selection">${selection}</div>
                 `;
                 list.appendChild(li);
             });
+        }
+
+        function describeChannelSelection(channel) {
+            try {
+                const criteria = JSON.parse(channel.criteria || '{}');
+                const mode = criteria.selection_mode || (criteria.include_items ? 'items' : 'all');
+                if (mode === 'sources') return `Automatic sources: ${(criteria.sources || []).join(', ')}`;
+                if (mode === 'items') return `Manual selection: ${(criteria.include_items || []).length} items`;
+                return 'All matching content';
+            } catch (e) {
+                return 'Legacy selection criteria';
+            }
         }
 
         async function deleteChannel(id) {
@@ -919,8 +1067,12 @@
             try {
                 const criteria = JSON.parse(channel.criteria);
 
+                const selectionMode = criteria.selection_mode || (criteria.include_items ? 'items' : 'all');
+                document.querySelector(`input[name="selection-mode"][value="${selectionMode}"]`).checked = true;
+                updateSelectionMode();
+
                 // Reset checks
-                document.querySelectorAll('.filter-grid input').forEach(cb => cb.checked = false);
+                document.querySelectorAll('#genre-grid input, #studio-grid input, #rating-grid input, #tag-grid input, #source-grid input').forEach(cb => cb.checked = false);
 
                 // Helper to check boxes
                 const check = (selector, values) => {
@@ -935,9 +1087,16 @@
                 check('#studio-grid', criteria.studios);
                 check('#rating-grid', criteria.ratings);
                 check('#tag-grid', criteria.tags);
+                check('#source-grid', criteria.sources);
+                updateSourceSummary();
+
+                const configuredYears = (criteria.years || []).map(Number).filter(Number.isFinite);
+                document.getElementById('slider-min').value = configuredYears.length ? Math.min(...configuredYears) : libraryYearMin;
+                document.getElementById('slider-max').value = configuredYears.length ? Math.max(...configuredYears) : libraryYearMax;
+                document.getElementById('slider-min').oninput();
 
                 // Update shows to reflect criteria
-                await updateShows();
+                if (selectionMode === 'items') await updateShows();
 
                 // Select specific items
                 if (criteria.include_items) {
